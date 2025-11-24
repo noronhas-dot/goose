@@ -24,8 +24,18 @@ impl AppleContainerSearch {
     }
 
     fn count_repositories(&self, text: &str) -> i64 {
-        // Count repository mentions (look for github.com/apple/ patterns)
-        let count = text.matches("github.com/apple/").count();
+        // Count repository mentions with various patterns
+        let mut count = 0;
+        count += text.matches("github.com/apple/").count();
+        count += text.matches("https://github.com/apple/").count();
+        count += text.matches("http://github.com/apple/").count();
+        // Also match apple/repo-name pattern (but be careful not to double-count)
+        let simple_pattern = text.matches("apple/").count();
+        // Subtract the ones we already counted to avoid duplicates
+        let duplicates = text.matches("github.com/apple/").count()
+            + text.matches("https://github.com/apple/").count()
+            + text.matches("http://github.com/apple/").count();
+        count += simple_pattern.saturating_sub(duplicates);
         count as i64
     }
 }
@@ -80,9 +90,11 @@ impl Evaluation for AppleContainerSearch {
             EvalMetricValue::Integer(repository_count),
         ));
 
-        // Check if GitHub search tools were used
-        let used_github_search = crate::eval_suites::used_tool(response.messages(), "github")
-            || crate::eval_suites::used_tool(response.messages(), "search");
+        // Check if GitHub search tools were used - look for specific tool patterns
+        let used_github_search =
+            crate::eval_suites::used_tool(response.messages(), "search_repositories")
+                || crate::eval_suites::used_tool(response.messages(), "search_code")
+                || crate::eval_suites::used_tool(response.messages(), "list_");
         metrics.push((
             "used_github_search".to_string(),
             EvalMetricValue::Boolean(used_github_search),
