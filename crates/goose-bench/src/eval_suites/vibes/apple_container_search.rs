@@ -19,8 +19,12 @@ impl AppleContainerSearch {
         let text_lower = text.to_lowercase();
         let has_apple = text_lower.contains("apple");
         let has_container = text_lower.contains("container") || text_lower.contains("docker");
+        let has_related_terms = text_lower.contains("related")
+            || text_lower.contains("associated")
+            || text_lower.contains("depend")
+            || text_lower.contains("ecosystem");
 
-        has_apple && has_container
+        has_apple && has_container && has_related_terms
     }
 
     fn count_repositories(&self, text: &str) -> i64 {
@@ -38,6 +42,19 @@ impl AppleContainerSearch {
         count += simple_pattern.saturating_sub(duplicates);
         count as i64
     }
+
+    fn count_all_repositories(&self, text: &str) -> i64 {
+        // Count all GitHub repository mentions (not just Apple)
+        let mut count = 0;
+        count += text.matches("github.com/").count();
+        count += text.matches("https://github.com/").count();
+        count += text.matches("http://github.com/").count();
+        // Remove duplicates from https:// and http:// prefixes
+        let with_https = text.matches("https://github.com/").count();
+        let with_http = text.matches("http://github.com/").count();
+        count -= with_https + with_http;
+        count as i64
+    }
 }
 
 #[async_trait]
@@ -52,7 +69,12 @@ impl Evaluation for AppleContainerSearch {
         // Collect baseline metrics (execution time, token usage, tool calls)
         let (response, perf_metrics) = collect_baseline_metrics(
             agent,
-            "Search for Apple repositories related to containers on GitHub. Find repositories from the Apple organization that deal with container technology, Docker, or containerization. Provide a list with repository names and descriptions. Use your available tools to search for these repositories.".to_string()
+            "Search for Apple repositories related to containers on GitHub, and also find other repositories that are directly or indirectly associated with Apple's container work. This includes:
+1. Repositories from the Apple organization that deal with container technology, Docker, or containerization
+2. Related repositories that Apple's container projects depend on or reference
+3. Notable container-related projects in the broader ecosystem that Apple uses or contributes to
+
+Provide a comprehensive list with repository names and descriptions, clearly indicating which are official Apple repositories and which are related/associated projects. Use your available tools to search for these repositories.".to_string()
         ).await;
 
         // Write response to file and get the text content
@@ -79,15 +101,20 @@ impl Evaluation for AppleContainerSearch {
 
         // Check if the response mentions relevant repositories
         let has_relevant_mentions = self.check_repository_mentions(&response_text);
-        let repository_count = self.count_repositories(&response_text);
+        let apple_repository_count = self.count_repositories(&response_text);
+        let total_repository_count = self.count_all_repositories(&response_text);
 
         metrics.push((
             "has_relevant_mentions".to_string(),
             EvalMetricValue::Boolean(has_relevant_mentions),
         ));
         metrics.push((
-            "repository_count".to_string(),
-            EvalMetricValue::Integer(repository_count),
+            "apple_repository_count".to_string(),
+            EvalMetricValue::Integer(apple_repository_count),
+        ));
+        metrics.push((
+            "total_repository_count".to_string(),
+            EvalMetricValue::Integer(total_repository_count),
         ));
 
         // Check if GitHub search tools were used - look for specific tool patterns
@@ -101,10 +128,15 @@ impl Evaluation for AppleContainerSearch {
         ));
 
         // Calculate a simple success score
-        let score = if has_relevant_mentions && repository_count > 0 {
-            1.0
-        } else if has_relevant_mentions || repository_count > 0 {
-            0.5
+        let score = if has_relevant_mentions
+            && apple_repository_count > 0
+            && total_repository_count > apple_repository_count
+        {
+            1.0 // Found Apple repos AND related repos
+        } else if has_relevant_mentions && apple_repository_count > 0 {
+            0.75 // Found Apple repos but no related repos
+        } else if has_relevant_mentions || total_repository_count > 0 {
+            0.5 // Partial success
         } else {
             0.0
         };
